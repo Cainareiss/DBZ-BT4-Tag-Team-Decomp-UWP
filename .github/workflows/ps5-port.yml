@@ -1,0 +1,41 @@
+name: PS5 port bootstrap
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ps5-port]
+    paths:
+      - "port/ps5/**"
+      - ".github/workflows/ps5-port.yml"
+
+jobs:
+  build-probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 wget unzip
+
+      - name: Install PS5 payload SDK
+        run: |
+          wget -q https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip
+          unzip -q ps5-payload-sdk.zip -d /tmp
+
+      - name: Run host checks
+        run: make -C port/ps5 host-check
+
+      - name: Cross-compile memory probe
+        env:
+          LLVM_CONFIG: llvm-config-18
+          PS5_PAYLOAD_SDK: /tmp/ps5-payload-sdk
+        run: make -C port/ps5
+
+      - name: Upload PS5 ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: bt4-ps5-memory-probe
+          path: port/ps5/build/bt4_ps5_probe.elf
+          if-no-files-found: error
