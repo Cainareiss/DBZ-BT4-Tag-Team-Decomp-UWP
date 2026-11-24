@@ -616,7 +616,14 @@ s32 BtlAct_SearchHandler(Chr *chr, s32 phase) {
                 BtlChar_PlayVoice(chr, 0x26);
             }
         }
-        if (BtlAct_IsOppInSearchWindow(chr)) {
+#ifdef BT4_TAG_TEAM_EXPANDED
+        extern s32 TagBattle_Focus(s32);
+#endif
+        if (BtlAct_IsOppInSearchWindow(chr)
+#ifdef BT4_TAG_TEAM_EXPANDED
+            && TagBattle_Focus(chr->player) == -1
+#endif
+        ) {
             BtlChar_SetHeldFlag(chr, 5);
             BtlMove_TurnYaw(chr, 2, 3.14159265f);
             BtlChar_PlayVoice(chr, 0x27);
@@ -671,6 +678,13 @@ s32 BtlAct_ChargeHandler(Chr *chr, s32 phase) {
     if (phase == 1) {
         switch (BtlAnim_GetId(chr)) {
             case 0x34:
+                {
+                    extern s32 BtlCharApi_GetChara(s32 objId);
+                    if (BtlCharApi_GetChara(chr->objId) == 221) {
+                        extern void BtlAnim_SetStep(Chr *, f32);
+                        BtlAnim_SetStep(chr, 3.0f);
+                    }
+                }
                 if (BtlAnim_AdvanceThen(chr, 0x35, 0.15f, 1)) {
                     BtlCharSnd_PlayCommon(chr, BtlParam_GetChargeStartSound(chr));
                     BtlChar_PlayVoice(chr, 0xD);

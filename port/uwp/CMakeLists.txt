@@ -29,6 +29,11 @@ if(BT3_GAME)
     file(GLOB tbo_assets CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/*.png")
     list(APPEND tbo_assets "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/CREDITS.md")
+    set(tbo_movies
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/tag_ui_intro.pss"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/tag_ui_loop.pss")
+    file(GLOB jiren_voice CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../assets/jiren-voice/*.adx")
     file(GLOB_RECURSE font_assets CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/fonts/*")
     file(GLOB_RECURSE translation_assets CONFIGURE_DEPENDS
@@ -41,6 +46,10 @@ if(BT3_GAME)
     endif()
     set_source_files_properties(${tbo_assets} PROPERTIES
         VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION "tbo/ui")
+    set_source_files_properties(${tbo_movies} PROPERTIES
+        VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION "tbo/ui")
+    set_source_files_properties(${jiren_voice} PROPERTIES
+        VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION "tbo/audio/jiren")
     foreach(font_asset IN LISTS font_assets)
         file(RELATIVE_PATH font_relative "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/fonts" "${font_asset}")
         get_filename_component(font_subdir "${font_relative}" DIRECTORY)
@@ -90,7 +99,7 @@ if(BT3_GAME)
         message(FATAL_ERROR "Run the UWP game and host object builders first")
     endif()
     add_executable(bt4_uwp_game WIN32 game_entry.cpp GamePackage.appxmanifest
-                   ${package_assets} ${tbo_assets} ${font_assets} ${translation_assets} ${mod_assets} "${sdl_dll}" ${voice_dlls} "${data_manifest}")
+                   ${package_assets} ${tbo_assets} ${tbo_movies} ${jiren_voice} ${font_assets} ${translation_assets} ${mod_assets} "${sdl_dll}" ${voice_dlls} "${data_manifest}")
     set_target_properties(bt4_uwp_game PROPERTIES OUTPUT_NAME BT4decompUWP)
     set_property(TARGET bt4_uwp_game PROPERTY VS_WINDOWS_TARGET_PLATFORM_MIN_VERSION "10.0.19041.0")
     set_source_files_properties(game_entry.cpp PROPERTIES COMPILE_OPTIONS /ZW)

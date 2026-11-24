@@ -135,7 +135,7 @@ void Port_MenuPage(int screen) {
     Port_MenuPart(screen == 0 ? PORT_MENU_NONE : screen == 2 ? PORT_MENU_LEFT
                   : screen == 52 ? PORT_MENU_FILL /* (Tenkaichi Budokai Online: its page stretched as before) */
                   : screen == 51 ? PORT_MENU_CENTER_FREE /* (the logo page before the title: a picture of the whole 4:3 screen) */
-                  : screen == 37 ? PORT_MENU_CENTER_ALL /* one coordinate space for composite Potara rows and tooltips */
+                  : screen == 21 || screen == 37 ? PORT_MENU_CENTER_ALL /* keep bracket segments and composite Potara rows in one coordinate space */
                   : screen == 1 ? PORT_MENU_CENTER_FREE /* (the title: its characters' art goes on past the 4:3 screen's edges,
                                                     Piccolo's cape at the top right: not cut there; its plates, parked off
                                                     the screen, are by their own rule) */
@@ -262,6 +262,9 @@ static int clip_part(const char *name, int x, int top) {
         if (starts(name, "mc_menu_plate_") || starts(name, "mc_icon") || starts(name, "mc_title") || starts(name, "mc_ch_a_db_") ||
             starts(name, "mc_dragonball") || starts(name, "mc_menu_yajirusi") || starts(name, "mc_chara_db")) {
             return PORT_MENU_LEFT;
+        }
+        if (top && strcmp(name, "mc_window_up_02") == 0) {
+            return PORT_MENU_RIGHT_ALL;
         }
         if (starts(name, "mc_guide_") || starts(name, "mc_uide_")) { /* ("mc_uide_ghn_bdl_hair": so named in the movie) */
             return PORT_MENU_RIGHT;

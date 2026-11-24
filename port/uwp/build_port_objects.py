@@ -18,7 +18,7 @@ import shader_spirv  # noqa: E402
 BASE = ["clang", "--target=x86_64-pc-windows-msvc", "-std=gnu99",
         "-fms-extensions", "-mno-ms-bitfields", "-fno-strict-aliasing",
         "-ffp-contract=off", "-fno-builtin", "-fno-stack-protector",
-        "-Wno-everything", "-O2", "-c", "-DBT3_UWP=1",
+        "-Wno-everything", "-O2", "-c", "-DBT3_UWP=1", "-DBT4_TAG_TEAM_EXPANDED=1",
         "-DWINAPI_FAMILY=WINAPI_FAMILY_APP", "-D_CRT_SECURE_NO_WARNINGS",
         "-Iinclude", "-Iport/include", "-Iport/src", f"-I{SDL}", f"-I{GEN}"]
 BASE += [f"-I{ROOT / 'port/uwp/include'}", "-include", "uwp_time.h",
@@ -57,7 +57,7 @@ def compile_newlib(source):
 def compile_cpp(source):
     obj = OUT / ("cxx_" + source.stem + ".obj")
     cmd = ["clang-cl", "/c", "/std:c++17", "/O2", "/MD", "/EHsc-", "/GR-",
-           "/DBT3_UWP=1", "/DNOMINMAX", "/DIMGUI_ENABLE_TEST_ENGINE", "/DWINAPI_FAMILY=WINAPI_FAMILY_APP",
+           "/DBT3_UWP=1", "/DBT4_TAG_TEAM_EXPANDED=1", "/DNOMINMAX", "/DIMGUI_ENABLE_TEST_ENGINE", "/DWINAPI_FAMILY=WINAPI_FAMILY_APP",
            "/D_CRT_SECURE_NO_WARNINGS", f"/I{SDL}",
            f"/I{ROOT / 'port/third_party/imgui'}", f"/I{ROOT / 'port/src/gs'}",
            f"/I{GEN}", f"/Fo{obj}", str(source)]

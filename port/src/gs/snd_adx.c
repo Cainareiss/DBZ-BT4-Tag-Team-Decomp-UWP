@@ -19,6 +19,41 @@
  * runs (replay validation) must not depend on a sound device.
  */
 #include <SDL3/SDL.h>
+#include "../../include/plat_songs.h"
+
+/* Keep the selector's music independent of the battle and online RNGs. The
+   caller supplies the normalized music list without its final Random entry. */
+int PortSongs_SelectorTrack(const int *ids, int count) {
+    static const int battleTracks[] = {8, 9, 10, 11, 12, 13, 14, 15, 16};
+    static Uint64 randomState;
+    static int previous = -1;
+    int previousIndex = -1;
+    int index;
+
+    if (count <= 0) {
+        ids = battleTracks;
+        count = SDL_arraysize(battleTracks);
+    }
+    if (!randomState)
+        randomState = SDL_GetPerformanceCounter();
+    for (int i = 0; i < count; ++i) {
+        if (ids[i] == previous) {
+            previousIndex = i;
+            break;
+        }
+    }
+    if (count > 1 && previousIndex >= 0) {
+        index = SDL_rand_r(&randomState, count - 1);
+        if (index >= previousIndex)
+            ++index;
+    } else {
+        index = SDL_rand_r(&randomState, count);
+    }
+    previous = ids[index];
+    if (SDL_getenv("BT3_BGM_DEBUG"))
+        SDL_Log("Selector soundtrack: %d", previous);
+    return previous;
+}
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,6 +63,10 @@
 #include "music_cache.h"
 #include "adx_loop.h"
 #include "spatial_audio.h"
+#include "game_profile.h"
+#ifdef BT4_TAG_TEAM_EXPANDED
+#include "../../include/bt4_jiren_voice.h"
+#endif
 
 enum { ADXT_STAT_STOP = 0, ADXT_STAT_PLAYING = 3, ADXT_STAT_PLAYEND = 5 };
 #define MAX_PLAYERS 40
@@ -547,10 +586,13 @@ static void stop(Player *p) {
    near-silent files each (0x87CA..0x87D3, 0x8D26..0x8D2F); 0x8D30 and on are the fight's streamed effects (the
    clash, a transformation's, the moves', a stage's), played the same for both voice sets: until 0.1.38 the range
    ran on to 0x8D4D, and online a player with the second set heard a guide's line in the place of those effects. */
+#include "gs_voice_files.h"
 static const char *voice_own_path(const char *path, char *buf, size_t size) {
     extern int Port_NetVoiceAlt(void); /* net.c */
-    const char *dir = strstr(path, "pzs3us2/"), *num;
+    const char *dir = strstr(path, "pzs4us0/"), *num;
+    int bt4=dir!=NULL,base=bt4?0x10CC0:0xD48;
     int fid, id, other = 0;
+    if(!dir)dir=strstr(path,"pzs3us2/");
 
     if (dir == NULL || !Port_NetVoiceAlt()) {
         return path;
@@ -559,17 +601,10 @@ static const char *voice_own_path(const char *path, char *buf, size_t size) {
     if (sscanf(num, "%d.bin", &fid) != 1) {
         return path;
     }
-    id = fid + 0xD48;
-    if (id >= 0x87D4 && id < 0x8D30) {
-        other = id - 0x55C;
-    } else if (id >= 0xCC32 && id < 0x10B16) {
-        other = id - 0x3EE4;
-    } else if (id >= 0x10B6C && id < 0x10BA4) {
-        other = id - 0x38;
-    } else {
-        return path;
-    }
-    snprintf(buf, size, "%.*s%05d.bin", (int)(num - path), path, other - 0xD48);
+    id = fid + base;
+    other=PortVoice_OtherStream(id,bt4);
+    if(!other)return path;
+    snprintf(buf, size, "%.*s%05d.bin", (int)(num - path), path, other - base);
     {
         FILE *fp = fopen(buf, "rb");
         if (fp == NULL) {
@@ -748,14 +783,46 @@ void *ADXT_Create(int maxnch, void *work, int worksize) {
 void ADXT_SetReloadSct(void *adxt, int nsct) { (void)adxt; (void)nsct; }
 void ADXT_SetSvrFreq(void *adxt, int freq) { (void)adxt; (void)freq; }
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+static int jiren_scream_path(int partition, int *file, char *path, size_t size) {
+    /* BT4 archive 0 contains the two sets of 100 streamed lines per fighter. */
+    enum { jirenDefault = 40102, jirenJapanese = 15102 };
+    extern int Port_NetVoiceAlt(void);
+    const int alt = Port_NetVoiceAlt();
+    const char *base, *language;
+    FILE *clip;
+
+    if (partition != 0 || (*file != jirenDefault + BT4_JIREN_SCREAM_LINE &&
+                           *file != jirenJapanese + BT4_JIREN_SCREAM_LINE)) return 0;
+    language = alt || *file == jirenJapanese + BT4_JIREN_SCREAM_LINE ? "japanese" :
+               Port_GameProfileEnglish() ? "english" : "spanish";
+    *file += BT4_JIREN_NATIVE_LEAD_LINE - BT4_JIREN_SCREAM_LINE;
+    base = SDL_GetBasePath();
+    if (!base || SDL_snprintf(path, size, "%stbo/audio/jiren/%s.adx", base, language) >= (int)size) return 0;
+    clip = fopen(path, "rb");
+    if (!clip) return 0;
+    fclose(clip);
+    return 1;
+}
+#endif
+
 void ADXT_StartAfs(void *adxt, int patid, int fid) {
     char path[512];
 
     if (adxt != NULL) {
-        int found = Port_FilePath(patid, fid, NULL, path, sizeof(path));
+        int found;
+#ifdef BT4_TAG_TEAM_EXPANDED
+        if (jiren_scream_path(patid, &fid, path, sizeof(path))) {
+            start(adxt, path);
+            view_start(adxt, path, 1);
+            return;
+        }
+#endif
+        found = Port_FilePath(patid, fid, NULL, path, sizeof(path));
         if (found) {
             extern void PortA11y_StreamStart(const char *path); /* a11y_game.c: a voice with its line shown as text */
-            start(adxt, path);
+            char soundtrack[1800];
+            start(adxt, adxt==sPlayers&&Port_GameProfileAnimeMusicPath(patid,fid,soundtrack,sizeof(soundtrack)) ? soundtrack : path);
             PortA11y_StreamStart(path);
         }
         if (found || (by_ticks() && Port_NetActive() && disc_blanks(path) != 0)) { /* (a match: counted even when this copy lacks the file) */

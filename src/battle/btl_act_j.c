@@ -1,5 +1,9 @@
 #include "common.h"
+#include "battle/bt4_balance.h"
 #include "battle/btl_act_j.h"
+#ifdef BT4_TAG_TEAM_EXPANDED
+#include "battle/tag_team_native.h"
+#endif
 
 /*
  * End of the fighter action decision code: 0x203168..0x204E78.
@@ -199,6 +203,11 @@ s32 BtlAct_CanTransform(BtlActJChr *chr, u32 index, s32 needBlast, s32 needAllow
     if (index >= 4) {
         return 0;
     }
+#ifdef BT4_TAG_TEAM_EXPANDED
+    if (needBlast && !TagBattle_AllowsTransformation(chr->player)) {
+        return 0;
+    }
+#endif
     if (needAllowed && chr->form.allowed == 0) {
         return 0;
     }
@@ -272,6 +281,9 @@ s32 BtlAct_QueueTransform(BtlActJChr *chr, s32 index) {
     s32 kind = BtlParam_GetSlotA4(chr, index);
     s32 unk24 = BtlParam_GetSlotA8(chr, index);
     s32 action;
+#ifdef BT4_TAG_TEAM_EXPANDED
+    s32 customOutfit = 0;
+#endif
 
     chr->form.index = index;
     chr->form.chara = chara;
@@ -285,7 +297,46 @@ s32 BtlAct_QueueTransform(BtlActJChr *chr, s32 index) {
     chr->form.animChara = chara;
     chr->form.unk1C = chara;
     chr->form.voiceChara = chara;
+#ifdef BT4_TAG_TEAM_EXPANDED
+    {
+        extern s32 Bt4_ExtraTransformTarget(void *chr, s32 slot);
+        extern s32 BattleSide_GetMemberChara(s32 side, s32 member);
+        extern s32 BattleSide_GetMemberCostume(s32 side, s32 member);
+        extern s32 BtlSide_GetActiveMember(s32 side);
+        extern s32 ChrTbl_WrapCostume(s32 chara, s32 *costume);
+        const s32 source = BtlMember_GetActive(chr)->chara;
+        const s32 extra = Bt4_ExtraTransformTarget(chr, index);
+
+        if (extra == BT4_GOKU_END) {
+            const s32 member = BtlSide_GetActiveMember(chr->player);
+            if (BattleSide_GetMemberChara(chr->player, member) == BT4_GOKU_END) {
+                chr->form.costume = BattleSide_GetMemberCostume(chr->player, member);
+            } else {
+                /* The base roster has a DB Super gi and no Capsule Corp. gi. */
+                chr->form.costume = chr->form.costume == 2 ? 3 : 0;
+            }
+        } else if (extra == BT4_GOKU_MASTERED_INSTINCT || extra == BT4_GOKU_INSTINCT_SIGN) {
+            static const u8 gi[] = {1, 1, 2, 2, 2, 1};
+            const s32 outfit = chr->form.costume;
+            chr->form.costume = (u32)outfit < sizeof(gi) ? gi[outfit] : 1;
+        } else if (extra == BT4_JIREN) {
+            chr->form.costume = BT4_JIREN_FULL_POWER_OUTFIT;
+        } else if (extra == BT4_ZAMASU_FUSED) {
+            chr->form.costume = BT4_ZAMASU_GIANT_OUTFIT;
+        }
+        if (extra >= 0 || (Bt4_ExtraFormsAllowed() && source == BT4_GOKU_INSTINCT_SIGN &&
+                           chara == BT4_GOKU_MASTERED_INSTINCT)) {
+            ChrTbl_WrapCostume(chara, &chr->form.costume);
+            chr->form.variant = 0;
+            chr->form.unk28 = chr->form.costume;
+            customOutfit = 1;
+        }
+    }
+#endif
     /* BT4 0x3BF0B4: per-source-costume target costume, four bytes per slot. */
+#ifdef BT4_TAG_TEAM_EXPANDED
+    if (!customOutfit)
+#endif
     {
         extern void *BtlChar_GetObj(BtlActJChr *chr);
         u8 *param = *(u8 **)((u8 *)BtlChar_GetObj(chr) + 0x91C);
@@ -394,6 +445,10 @@ s32 BtlAct_CheckFusionInput(BtlActJChr *chr) {
     if (index < 0) {
         return 0;
     }
+#ifdef BT4_TAG_TEAM_EXPANDED
+    {extern s32 TagFusion_Local(void),TagFusion_Request(s32,s32);
+     if(TagFusion_Local())return TagFusion_Request(chr->player,index);}
+#endif
     if (BtlAct_CanFuse(chr, index, 1, !BtlChar_TestFlag(chr, 0x10F), &partner)) {
         return BtlAct_QueueFusion(chr, index, partner);
     }
@@ -563,32 +618,17 @@ s32 BtlAct_CanUseTechnique(BtlActJChr *chr, s32 slot) {
  * Technique inputs: 108 / 109 / 110 (charge + blast, neutral / up / down, or flags 0x122..0x124) = slot 2 / 3 / 4.
  * Queues [0x1B first when flag 0x13 is set and the technique allows it], [0x105 for slot 4], the technique action.
  */
-s32 BtlAct_CheckTechniqueInput(BtlActJChr *chr) {
-    s32 slot = -1;
+s32 BtlAct_CanQueueTechnique(BtlActJChr *chr, s32 slot) {
+    return chr->techDelay<=0&&BtlAct_CanUseTechnique(chr,slot)&&BtlChar_IsFree(chr);
+}
+
+s32 BtlAct_QueueTechnique(BtlActJChr *chr, s32 slot) {
     s32 n = 0;
     s32 pre;
     s32 flags;
     s32 kind;
 
-    if (chr->techDelay > 0) {
-        return 0;
-    }
-    if (BtlInput_TestAction(chr, 0x6C, 1)) {
-        slot = 2;
-    }
-    if (BtlInput_TestAction(chr, 0x6D, 1)) {
-        slot = 3;
-    }
-    if (BtlInput_TestAction(chr, 0x6E, 1)) {
-        slot = 4;
-    }
-    if (slot < 0) {
-        return 0;
-    }
-    if (!BtlAct_CanUseTechnique(chr, slot)) {
-        return 0;
-    }
-    if (!BtlChar_IsFree(chr)) {
+    if (!BtlAct_CanQueueTechnique(chr, slot)) {
         return 0;
     }
     if (BtlChar_TestFlag(chr, 0x13)) {
@@ -608,6 +648,18 @@ s32 BtlAct_CheckTechniqueInput(BtlActJChr *chr) {
     }
     BtlAct_SetQueue(chr, n++, BtlAct_GetTechniqueAction(chr, slot));
     return n;
+}
+
+/* Input and coordinated attacks share the native prerequisites and queue,
+ * including the grounded prelude and ultimate prelude. Ki is spent by the
+ * technique's enter handler, never by the caller of this queue builder. */
+s32 BtlAct_CheckTechniqueInput(BtlActJChr *chr) {
+    s32 slot=-1;
+    if(chr->techDelay>0)return 0;
+    if(BtlInput_TestAction(chr,0x6C,1))slot=2;
+    if(BtlInput_TestAction(chr,0x6D,1))slot=3;
+    if(BtlInput_TestAction(chr,0x6E,1))slot=4;
+    return slot>=0?BtlAct_QueueTechnique(chr,slot):0;
 }
 
 /* Action id of skill slot 0..1 from the skill's sequence: 0xFD.., 0xFF.. or 0x101... */

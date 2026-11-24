@@ -28,6 +28,7 @@ extern "C" void GsDx9_StripTextureFree(void *);
 extern "C" int GsGl_DirectXVersion(void);
 #endif
 #include "ui.h"
+#include "../../../include/battle/emotes.h"
 #include "presentation.h"
 #include "namefont.h"
 #include "../port_release.h"
@@ -37,6 +38,7 @@ extern "C" int GsDraw_PerformanceMode(void);
 extern "C" int Port_SpecialMoveCameras(int change);
 #include "menu_translation.h"
 #include "online_language.h"
+#include <mutex>
 #include "../quit_dialog.h"
 #include "net_chat.h"
 #include "voice.h"
@@ -80,6 +82,8 @@ int Port_NetActive(void);
 int Port_NetMe(void);                          // gs/net.c: this copy's side, 0 or 1
 void *BtlChar_FindByObjId(int objId);          // the game: the fighter of a side, NULL outside a fight
 int Port_NetStats(int *out);                   // gs/net.c: the meter's numbers of an online match
+void Port_NetAutomaticOptions(void);
+int Port_NetTimingStats(int *out);
 int Port_TagNetwork(void),Port_TagPing(void),Port_TagLocalBattle(void);
 int Port_LobbyOther(void);
 extern unsigned gPortLiveBlanks;               // plat_stub.c: vertical blanks the game has gone through
@@ -185,9 +189,16 @@ static const char *f1_text(const char *english) {
         {"Video", "Vídeo", "Vídeo"},
         {"Effects", "Efectos", "Efeitos"},
         {"Audio", "Audio", "Áudio"},
+        {"Anime soundtrack", "Música original del anime", "Trilha sonora do anime"},
+        {"Install the Spanish game profile to use its soundtrack with English text and voices.", "Instala el perfil en español para usar su música con los textos y las voces en inglés.", "Instale o perfil em espanhol para usar sua trilha sonora com textos e vozes em inglês."},
+        {"Applies from the next music track.", "Se aplica a partir de la próxima pista.", "Vale a partir da próxima faixa."},
         {"UI", "Interfaz", "Interface"},
         {"Controls", "Controles", "Controles"},
         {"Cheats", "Trucos", "Trapaças"},
+        {"Emote", "Emote", "Emote"},
+        {"Original taunt", "Burla original", "Provocação original"},
+        {"Hold L1 and press Circle while idle. Move to cancel.", "Mantén L1 y pulsa Círculo en reposo. Muévete para cancelar.", "Segure L1 e aperte Círculo parado. Mova-se para cancelar."},
+        {"Hold LB and press B while idle. Move to cancel.", "Mantén LB y pulsa B en reposo. Muévete para cancelar.", "Segure LB e aperte B parado. Mova-se para cancelar."},
         {"Misc", "Varios", "Outros"},
         {"Online", "En línea", "Online"},
         {"Spectator", "Espectador", "Espectador"},
@@ -248,7 +259,7 @@ static const char *f1_text(const char *english) {
         {"Choose original battle announcements and HUD text, or any battle font listed in fonts.tsv.", "Elige los anuncios y textos del HUD originales o una fuente de combate incluida en fonts.tsv.", "Escolha os anúncios e textos do HUD originais ou uma fonte de batalha listada em fonts.tsv."},
         {"Replace the shared font used by dialogue, subtitles and ordinary UI text.\nOriginal keeps the game's glyphs. Text placement, colors, shadows and icons are preserved.", "Reemplaza la fuente compartida de diálogos, subtítulos y textos de interfaz.\nOriginal conserva los glifos del juego. Se mantienen posiciones, colores, sombras e iconos.", "Substitui a fonte compartilhada de diálogos, legendas e textos da interface.\nOriginal mantém os caracteres do jogo. Posições, cores, sombras e ícones são preservados."},
         {"Where a fight's health bars and gauges sit in a picture wider than 4:3.\nLong health bars: the bars reach from the edges to the timer.\nIn the middle: the original 4:3 arrangement, next to the timer.", "Posición de las barras de vida y medidores en una imagen más ancha que 4:3.\nBarras extendidas: van desde los bordes hasta el temporizador.\nCentrado: disposición original 4:3, junto al temporizador.", "Posição das barras de vida e medidores em uma imagem mais larga que 4:3.\nBarras longas: vão das bordas até o cronômetro.\nCentralizado: disposição original 4:3, ao lado do cronômetro."},
-        {"What fills the sides where the picture is narrower than the window:\na 4:3 picture, or the menus with \"Menus: 4:3\", in a wide window.\nFighter panels: the border, and in a fight each side's fighter with its name and form.\nYour own: a folder \"bars\" next to the game with trim.png (the strip along the\npicture, kept in proportion) and fill.png (stretched over the rest). Read at start.", "Qué aparece en los laterales cuando la imagen es más estrecha que la ventana:\nla imagen 4:3 o los menús con \"Menús: 4:3\" en una ventana panorámica.\nPaneles de luchadores: el borde y, durante el combate, el luchador de cada lado con su nombre y transformación.\nPersonalizadas: carpeta \"bars\" junto al juego con trim.png (borde proporcional) y fill.png (relleno estirado). Se leen al iniciar.", "O que aparece nas laterais quando a imagem é mais estreita que a janela:\na imagem 4:3 ou os menus com \"Menus: 4:3\" em uma janela widescreen.\nPainéis dos lutadores: a moldura e, na batalha, o lutador de cada lado com nome e forma.\nPersonalizadas: pasta \"bars\" ao lado do jogo com trim.png (moldura proporcional) e fill.png (preenchimento esticado). Lida ao iniciar."},
+        {"What fills the sides where the picture is narrower than the window:\na 4:3 picture, or the menus with \"Menus: 4:3\", in a wide window.\nFighter panels: the border, and in a fight each side's fighter artwork.\nYour own: a folder \"bars\" next to the game with trim.png (the strip along the\npicture, kept in proportion) and fill.png (stretched over the rest). Read at start.", "Qué aparece en los laterales cuando la imagen es más estrecha que la ventana:\nla imagen 4:3 o los menús con \"Menús: 4:3\" en una ventana panorámica.\nPaneles de luchadores: el borde y, durante el combate, el arte del luchador de cada lado.\nPersonalizadas: carpeta \"bars\" junto al juego con trim.png (borde proporcional) y fill.png (relleno estirado). Se leen al iniciar.", "O que aparece nas laterais quando a imagem é mais estreita que a janela:\na imagem 4:3 ou os menus com \"Menus: 4:3\" em uma janela widescreen.\nPainéis dos lutadores: a moldura e, na batalha, a arte do lutador de cada lado.\nPersonalizadas: pasta \"bars\" ao lado do jogo com trim.png (moldura proporcional) e fill.png (preenchimento esticado). Lida ao iniciar."},
         {"Hide what's new", "Ocultar novedades", "Ocultar novidades"},
         {"What's new", "Novedades", "Novidades"},
         {"Release page", "Página de la versión", "Página da versão"},
@@ -395,6 +406,8 @@ static const char *f1_text(const char *english) {
         {"press a button...", "pulsa un botón...", "pressione um botão..."},
         {"START + SELECT", "START + SELECT", "START + SELECT"},
         {"Controller %d (not connected)", "Mando %d (no conectado)", "Controle %d (desconectado)"},
+        {"Button icons", "Iconos del mando", "Ícones do controle"},
+        {"Select the button labels shown in menus and prompts.", "Elige los botones que se muestran en los menús y avisos.", "Escolha os botões exibidos nos menus e avisos."},
         {"Lobby%s%s", "Sala%s%s", "Sala%s%s"},
         {"Back to the lobby", "Volver a la sala", "Voltar à sala"},
         {"Ends the match for everyone: all go back to the lobby window, where the rules can be changed.", "Finaliza la partida para todos y vuelve a la sala, donde se pueden cambiar las reglas.", "Encerra a partida para todos e volta à sala, onde as regras podem ser alteradas."},
@@ -825,19 +838,6 @@ void Ui_TextureFree(SDL_GPUTexture *tex) {
 ImFont *Ui_FontBold(void) { return sFontBold; }
 bool FightPanels_Draw(ImDrawList *dl, float lx, float rx, float y0, float y1, float bar, float trim);
 
-// The fight panels' two faces ("Name font", "Form font" in the settings): fonts of the game's own list (fonts.tsv,
-// as the Menu font and the Dialogue / UI font), checked as those are (menu_text.c) and saved by their id; "Default"
-// is the first of the list that can be used. A choice is loaded into the font atlas between two frames (fonts_apply).
-struct PanelFont {
-    const char *setting;
-    ImFont *font;
-    int choice;  // in use (0: Default)
-    int pending; // chosen, loaded before the next frame (-1: nothing)
-};
-static PanelFont sPanelFont[2] = {{"panel_name_font_id", NULL, 0, -1}, {"panel_form_font_id", NULL, 0, -1}};
-ImFont *Ui_FontName(void) { return sPanelFont[0].font; }
-ImFont *Ui_FontForm(void) { return sPanelFont[1].font; }
-
 // A choice of the list as an ImGui font (NULL: none can be used).
 static ImFont *panel_font_load(int choice) {
     char path[1400];
@@ -851,43 +851,6 @@ static ImFont *panel_font_load(int choice) {
         }
     }
     return NULL;
-}
-
-static void fonts_apply(void) {
-    for (PanelFont &pf : sPanelFont) {
-        if (pf.pending < 0) {
-            continue;
-        }
-        ImFont *f = panel_font_load(pf.pending);
-        if (f != NULL) {
-            if (pf.font != NULL) {
-                ImGui::GetIO().Fonts->RemoveFont(pf.font);
-            }
-            pf.font = f;
-            pf.choice = pf.pending;
-            Port_SettingSave(pf.setting, MenuText_FontId(pf.choice));
-            Port_SettingsWrite();
-        }
-        pf.pending = -1;
-    }
-}
-
-// A combo of the game's fonts; the choice is loaded before the next frame.
-static void font_picker(const char *label, PanelFont &pf, const char *tip) {
-    if (ImGui::BeginCombo(f1_text(label), f1_text(pf.choice > 0 ? MenuText_FontName(pf.choice) : "Default"))) {
-        if (ImGui::Selectable(f1_text("Default"), pf.choice == 0)) {
-            pf.pending = 0;
-        }
-        for (int i = 1; i < MenuText_FontCount(); i++) {
-            ImGui::PushID(i);
-            if (ImGui::Selectable(f1_text(MenuText_FontName(i)), pf.choice == i)) {
-                pf.pending = i;
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::SetItemTooltip("%s", f1_text(tip));
 }
 
 static void bars_draw(void) {
@@ -1063,15 +1026,11 @@ int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const c
             break;
         }
     }
-    { // the fight panels' faces: the two chosen ones (sPanelFont), and the list's first where one cannot be had
+    { // Load the first game font for HUD mods.
         if (io.Fonts->Fonts.Size == 0) {
             io.Fonts->AddFontDefault(); // (the window's font stays the first)
         }
         sFontBold = panel_font_load(0);
-        for (PanelFont &pf : sPanelFont) {
-            pf.choice = MenuText_FontChoice(Port_Setting(pf.setting, 0));
-            pf.font = panel_font_load(pf.choice);
-        }
     }
 #if defined(_WIN32) && !defined(BT3_UWP)
     if (sD3D11) {
@@ -1360,7 +1319,7 @@ static void quick_status(int state, int &lastState, const char *name) {
         // The same for everyone in a quick match, whoever turns out to be the host: rollback of up to 4 frames and
         // the input delay measured from the connection. (The Host tab's own choices are for matches with someone
         // you can agree them with; a stranger's saved ones were not to be inherited unseen.)
-        Port_NetOptions(Port_RollCan() ? 4 : 0, -2);
+        Port_NetAutomaticOptions();
         Port_NetSpeedSet(Port_NetSpeedStandard()); // (every quick match: the competitive standard)
         Port_NetRulesSet(sQueue == 0 ? 0 : sQueue == 1 ? 1 : 2, sQueue >= 2 ? sQueue - 2 : 0, 4);
         Port_NetNameSet(name);
@@ -1842,16 +1801,20 @@ int Ui_Event(const SDL_Event *ev) {
            ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN || ev->type == SDL_EVENT_MOUSE_BUTTON_UP || ev->type == SDL_EVENT_MOUSE_WHEEL;
 }
 
-static const char *pad_source_name(int src) {
-    static const char *names[] = {"A / Cross", "B / Circle", "X / Square", "Y / Triangle", "Back / Select", "Guide", "Start",
-                                  "Left stick click", "Right stick click", "Left shoulder", "Right shoulder", "D-pad up",
-                                  "D-pad down", "D-pad left", "D-pad right", "Misc 1", "Right paddle 1", "Left paddle 1",
-                                  "Right paddle 2", "Left paddle 2", "Touchpad"};
+extern "C" int PortInput_XboxGlyphs(int player);
+
+static const char *pad_source_name(int src, int player) {
+    static const char *const xbox[] = {"A", "B", "X", "Y", "View", "Xbox", "Menu", "LS", "RS", "LB", "RB"};
+    static const char *const playstation[] = {"Cross", "Circle", "Square", "Triangle", "Select", "PS", "Start", "L3", "R3", "L1", "R1"};
+    const bool useXbox = PortInput_XboxGlyphs(player) != 0;
+    if (src == PORT_PAD_LT) return useXbox ? "LT" : "L2";
+    if (src == PORT_PAD_RT) return useXbox ? "RT" : "R2";
+    if (src >= 0 && src < IM_ARRAYSIZE(xbox)) return f1_text(useXbox ? xbox[src] : playstation[src]);
+    static const char *names[] = {"D-pad up", "D-pad down", "D-pad left", "D-pad right", "Misc 1", "Right paddle 1",
+                                  "Left paddle 1", "Right paddle 2", "Left paddle 2", "Touchpad"};
     static char other[24];
-    if (src == PORT_PAD_LT) { return f1_text("Left trigger"); }
-    if (src == PORT_PAD_RT) { return f1_text("Right trigger"); }
     if (src < 0) { return "-"; }
-    if (src < (int)(sizeof(names) / sizeof(names[0]))) { return f1_text(names[src]); }
+    if (src - IM_ARRAYSIZE(xbox) < IM_ARRAYSIZE(names)) { return f1_text(names[src - IM_ARRAYSIZE(xbox)]); }
     snprintf(other, sizeof(other), f1_text("Button %d"), src);
     return other;
 }
@@ -2642,15 +2605,9 @@ static void ui_tab(PortVideo &v) {
         }
         ImGui::SetItemTooltip(f1_text("What fills the sides where the picture is narrower than the window:\n"
                               "a 4:3 picture, or the menus with \"Menus: 4:3\", in a wide window.\n"
-                              "Fighter panels: the border, and in a fight each side's fighter with its name and form.\n"
+                              "Fighter panels: the border, and in a fight each side's fighter artwork.\n"
                               "Your own: a folder \"bars\" next to the game with trim.png (the strip along the\n"
                               "picture, kept in proportion) and fill.png (stretched over the rest). Read at start."));
-    }
-    if (sBars == 2) { // the fighter panels' faces
-        font_picker("Name font", sPanelFont[0], "The fighter's name down the panel. The game's fonts, as for the Menu font\n"
-                                                "(a font of your own: add it to fonts/fonts.tsv). Default: the first of the list.");
-        font_picker("Form font", sPanelFont[1], "The form under the portrait. The game's fonts, as for the Menu font.\n"
-                                                "Default: the first of the list.");
     }
 }
 
@@ -2661,6 +2618,19 @@ static void audio_tab(PortVideo &v) {
     voice_settings_draw();
     ImGui::SeparatorText(f1_text("Game Audio"));
     ImGui::SliderInt(f1_text("Music"), &v.music, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
+    if(Port_GameProfileLanguage()==1){
+        const bool available=Port_GameProfileAvailable(0)!=0;
+        bool anime=Port_Setting("anime_music",0)!=0;
+        ImGui::BeginDisabled(!available);
+        if(ImGui::Checkbox(f1_text("Anime soundtrack"),&anime)){
+            Port_SettingSave("anime_music",anime);
+            Port_SettingsWrite();
+        }
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s",f1_text(available?"Applies from the next music track.":
+                "Install the Spanish game profile to use its soundtrack with English text and voices."));
+    }
     ImGui::SliderInt(f1_text("Sound effects"), &v.effects, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetItemTooltip(f1_text("Hits, blasts, menu sounds. Takes effect with the next sound that starts."));
     ImGui::SliderInt(f1_text("Voices"), &v.voices, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
@@ -2705,6 +2675,28 @@ static void tech_tab(void) {
 }
 
 static void cheats_tab(void) {
+    {
+        const char *const emotes[] = {
+            f1_text("Original taunt"),
+            "01  Fortnite Dance", "02  Gamna Style", "03  Pose 1", "04  Dance 01", "05  Celebración",
+            "06  Dance 02", "07  Twerk", "08  Twerk 2", "09  Habilidad 1", "10  Habilidad 2",
+            "11  Pose 2", "12  Pose 3", "13  Pose 4", "14  Burla", "15  Dance 03",
+            "16  Dance 04", "17  Dance 05", "18  Pose 5", "19  Habilidad 3", "20  Muerte",
+            "21  Bingo 01", "22  Bingo 02", "23  Female Standing Pose",
+            "24  Dancing", "25  Step Hip Hop Dance", "26  Silly Dancing", "27  Rumba Dancing"
+        };
+        static_assert(IM_ARRAYSIZE(emotes) == BTL_EMOTE_COUNT + 1, "One label per emote");
+        int selected = Port_Setting(BTL_EMOTE_SETTING, 0);
+        if (selected < 0 || selected > BTL_EMOTE_COUNT) selected = 0;
+        ImGui::SetNextItemWidth(U(250.0f));
+        if (ImGui::Combo(f1_text("Emote"), &selected, emotes, IM_ARRAYSIZE(emotes), 10)) {
+            Port_SettingSave(BTL_EMOTE_SETTING, selected);
+            Port_SettingsWrite();
+        }
+        ImGui::TextWrapped("%s", f1_text(PortInput_XboxGlyphs(0) ?
+            "Hold LB and press B while idle. Move to cancel." : "Hold L1 and press Circle while idle. Move to cancel."));
+        ImGui::Separator();
+    }
     {
         int speed = Port_GameSpeed();
         if (ImGui::SliderInt(f1_text("Game speed"), &speed, 50, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
@@ -2895,6 +2887,17 @@ static void controls_tab(void) {
         ImGui::EndCombo();
     }
     SDL_free(ids);
+    {
+        const char *styles[] = {f1_text("Automatic"), "PlayStation", "Xbox"};
+        int style = Port_Setting("pad_glyph_style", 0);
+        if (style < 0 || style > 2) style = 0;
+        ImGui::SetNextItemWidth(U(180.0f));
+        if (ImGui::Combo(f1_text("Button icons"), &style, styles, IM_ARRAYSIZE(styles))) {
+            Port_SettingSave("pad_glyph_style", style);
+            Port_SettingsWrite();
+        }
+        ImGui::SetItemTooltip("%s", f1_text("Select the button labels shown in menus and prompts."));
+    }
     ImGui::SameLine();
     if (ImGui::Button(f1_text("Reset to defaults"))) {
         PortInput_ResetDefaults(player);
@@ -2904,9 +2907,10 @@ static void controls_tab(void) {
         sticks_panel(player);
     }
     {
-        int *setting=PortInput_TargetStick(player);bool enabled=*setting!=0;
-        if(ImGui::Checkbox(f1_text("Right stick enemy targeting"),&enabled)){
-            *setting=enabled;PortInput_Save();
+        int method=PortInput_TagTargetMethod(player,-1);
+        const char *choices[]={"L3",PortOnline_Text("Right stick"),PortOnline_Text("D-pad")};
+        if(ImGui::Combo(PortOnline_Text("Target selection"),&method,choices,3)){
+            PortInput_TagTargetMethod(player,method);
         }
         ImGui::SetItemTooltip(f1_text("Flick toward an enemy to switch targets in Tag Team. In a duel, lock onto your opponent. Release the stick before switching again. Original right-stick actions remain available when this is off."));
     }
@@ -2934,7 +2938,7 @@ static void controls_tab(void) {
                 capture(1, player, a);
             }
             ImGui::TableNextColumn();
-            snprintf(label, sizeof(label), "%s##p%d", waitPad ? f1_text("press a button...") : pad >= 0 ? pad_source_name(pad) : f1_text("START + SELECT"), a);
+            snprintf(label, sizeof(label), "%s##p%d", waitPad ? f1_text("press a button...") : pad >= 0 ? pad_source_name(pad, player) : f1_text("START + SELECT"), a);
             if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f))) {
                 capture(2, player, a);
             }
@@ -2969,7 +2973,7 @@ static void controls_tab(void) {
             }
             ImGui::TableNextColumn();
             if (a < PORT_PAD_BUTTONS) {
-                snprintf(label, sizeof(label), "%s##p%d", waitPad ? f1_text("press a button...") : pad_source_name(pads[a]), a);
+                snprintf(label, sizeof(label), "%s##p%d", waitPad ? f1_text("press a button...") : pad_source_name(pads[a], player), a);
                 if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f))) {
                     capture(2, player, a);
                 }
@@ -3146,6 +3150,47 @@ extern "C" void Port_UiNotice(const char *text) {
 // A line in the middle of the screen, the picture behind it dimmed, while the game's thread waits inside a blank
 // (the start of an online match, gs/net.c): drawn by the frames it shows meanwhile (Gs_HoldFrame). `ms` > 0: the
 // wait is over; the line stays that long more, over the game's own pictures and without the dimming. NULL: gone.
+#include "dragon_ball_notice.inc"
+
+struct RankedSettlement {
+    Uint64 started;
+    int points,delta;
+};
+static std::mutex sSettlementLock;
+static RankedSettlement sSettlement{};
+extern "C" void Port_UiRankedSettlement(int points,int delta){
+    std::lock_guard<std::mutex> guard(sSettlementLock);
+    sSettlement={SDL_GetTicks()+1,points,delta};
+}
+
+static RankedSettlement ranked_settlement() {
+    std::lock_guard<std::mutex> guard(sSettlementLock);
+    return sSettlement;
+}
+
+static void ranked_settlement_draw(const RankedSettlement &settlement,Uint64 elapsed) {
+    auto *draw=ImGui::GetForegroundDrawList();
+    ImFont *font=ImGui::GetFont();
+    const ImVec2 screen=ImGui::GetIO().DisplaySize;
+    const float u=fminf(screen.x/730.0f,screen.y/610.0f);
+    const float motion=fmaxf(fmaxf(0.0f,1.0f-elapsed/220.0f),fmaxf(0.0f,(float(elapsed)-3830.0f)/370.0f));
+    const float w=283*u,h=99*u;
+    const ImVec2 top(screen.x-w-24*u+motion*motion*(w+32*u),screen.y*0.59f);
+    const ImVec2 bottom(top.x+w,top.y+h);
+    const ImU32 gold=IM_COL32(239,186,58,255),cream=IM_COL32(240,245,237,255);
+    const ImU32 delta=settlement.delta>0?IM_COL32(161,232,142,255):
+                      settlement.delta<0?IM_COL32(255,173,154,255):cream;
+    draw->AddRectFilled(top,bottom,IM_COL32(17,51,57,244),6*u);
+    draw->AddRect(top,bottom,gold,6*u,0,1.4f*u);
+    draw->AddLine(ImVec2(top.x+14*u,top.y+31*u),ImVec2(bottom.x-14*u,top.y+31*u),gold,u);
+    draw->AddText(font,16*u,ImVec2(top.x+14*u,top.y+9*u),cream,PortOnline_Text("Ranked result"));
+    char text[80];
+    SDL_snprintf(text,sizeof(text),PortOnline_Text("%+d points"),settlement.delta);
+    draw->AddText(font,25*u,ImVec2(top.x+14*u,top.y+36*u),delta,text);
+    SDL_snprintf(text,sizeof(text),PortOnline_Text("Total: %d points"),settlement.points);
+    draw->AddText(font,15*u,ImVec2(top.x+14*u,top.y+74*u),cream,text);
+}
+
 static char sBanner[256];
 static Uint64 sBannerUntil; // 0: while the game waits
 extern "C" void Port_UiBanner(const char *text, int ms) {
@@ -3291,6 +3336,11 @@ static void meter_draw(void) {
                 ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  nothing arrived from the other player");
             }
             ImGui::Text("delay %d%s, rollback up to %d", n[6], n[7] ? " (auto)" : "", n[5]);
+            int timing[4];
+            if (Port_NetTimingStats(timing) && timing[0] >= 0) {
+                ImGui::Text(PortOnline_Text("Setup ping %d-%d ms"), timing[0], timing[1]);
+                if (timing[2] > 0) ImGui::SameLine(), ImGui::Text("(%d/%d)", timing[2], timing[3]);
+            }
             if (n[9] != 0) { // the desync check found the two games apart (the match goes on)
                 ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "desync since frame %d", n[9]);
             }
@@ -3635,6 +3685,23 @@ static bool frame_build(void) {
     bool voice = sReady && voiceOptions.indicators && (voiceState.sessionMode!=0||(getenv("BT4_RENDER_TEST")&&getenv("BT4_VOICE_ICON_TEST")));
     bool banner = sReady && sBanner[0] != '\0' && !tagMenu;
     Uint64 now = SDL_GetTicks();
+    const RankedSettlement settlement=ranked_settlement();
+    const Uint64 settlementElapsed=settlement.started?now+1-settlement.started:4200;
+    const bool showSettlement=sReady&&!sOpen&&!tagMenu&&settlementElapsed<4200&&
+        (gPortMenuMode||!PortHud_Hidden());
+    DragonBallNotice ballNotice = dragon_ball_notice();
+    Uint64 ballElapsed = now - ballNotice.started;
+    bool ballNoticeOn = sReady && !gPortMenuMode && !sOpen && !PortHud_Hidden() &&
+                        gUiPresentH > 0 && gUiPresentW > 0 && ballNotice.stars && ballElapsed < dragonBallNoticeDuration;
+    if (sReady && !gPortMenuMode && getenv("BT4_RENDER_TEST")) {
+        if (const char *sample = getenv("BT4_DRAGON_BALL_NOTICE_TEST")) {
+            SDL_strlcpy(ballNotice.finder, "NauTaro", sizeof(ballNotice.finder));
+            ballNotice.stars = 4;
+            ballNotice.started = 0;
+            ballElapsed = SDL_strtoul(sample, nullptr, 10);
+            ballNoticeOn = gUiPresentH > 0 && gUiPresentW > 0 && ballElapsed < dragonBallNoticeDuration;
+        }
+    }
     bool saving = save_icon_on(now) && sReady && gUiPresentW > 0 && gUiPresentH > 0;
     bool watched = sReady && Port_NetWatchers() > 0 && !sOpen;  // a player's: who watches the match
     if(PortHud_Hidden() && !gPortMenuMode)voice=banner=saving=false;
@@ -3643,7 +3710,7 @@ static bool frame_build(void) {
     meter_count();
     sBuilt = false;
     UiA11y_Frame(sReady && sOpen && !sQuit, !sQuit);
-    if (!sReady || (!sOpen && !sQuit && !sUpdPromptOpen && !sUpdPromptQueued && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !saving && !tagMenu && !voice && !watched && !updateAvailable && !mods)) {
+    if (!sReady || (!sOpen && !sQuit && !sUpdPromptOpen && !sUpdPromptQueued && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !showSettlement && !ballNoticeOn && !saving && !tagMenu && !voice && !watched && !updateAvailable && !mods)) {
         return false;
     }
     if (sPadHold && sCapKind != 2) { // a binding was taken: the controller works the window again once nothing is held
@@ -3681,7 +3748,6 @@ static bool frame_build(void) {
     }
     ImGui_ImplSDL3_NewFrame();
     ui_scale_apply(); // (the window's size is known from here)
-    fonts_apply(); // (a face chosen for the fight panels, between two frames)
     ImGui::NewFrame();
     update_prompt_draw();
     // The mouse pointer is hidden over the game's picture and shown with a window of this file that takes the mouse:
@@ -3763,6 +3829,10 @@ static bool frame_build(void) {
             }
         }
         dl->AddText(font, size, ImVec2(x, y), IM_COL32(255, 236, 120, 255), sBanner, NULL, wrap);
+    }
+    if(showSettlement)ranked_settlement_draw(settlement,settlementElapsed);
+    if (ballNoticeOn) {
+        dragon_ball_notice_draw(ballNotice, ballElapsed);
     }
     if (saving) {
         save_icon_draw(now);

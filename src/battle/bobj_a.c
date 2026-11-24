@@ -14,6 +14,10 @@
  */
 #include "common.h"
 #include "battle/bobj_a.h"
+#include "battle/emotes.h"
+#ifdef PORT
+#include "battle_emote_motions.inc"
+#endif
 
 extern void *memset(void *dst, s32 c, u32 n);
 extern s32 memcmp(const void *a, const void *b, u32 n);
@@ -618,6 +622,101 @@ void BtlObjAnim_SamplePose(BobjObj *obj) {
         }
     }
 }
+
+
+#ifdef PORT
+/* These matrices are copied into the draw packets. The fighter, including its
+ * collision volumes and live animation pose, is restored before simulation. */
+typedef struct BtlEmoteDrawNode {
+    BobjPart *part;
+    Mtx44 matrix;
+    Mtx44 parent;
+} BtlEmoteDrawNode;
+
+static void BtlObjEmote_Sample(BobjAnim *motion, BobjBone *bone, const BobjPart *part,
+                              f32 frame, f32 hipScale, Vec4 *pos, Quat *rot) {
+    u16 cursor = 0;
+    BobjTrack *track;
+
+    if (bone->id >= BOBJ_NODE_MAX || !motion->track[bone->id]) {
+        *pos = part->pos;
+        *rot = part->rot;
+        return;
+    }
+    track = TRACK_AT(motion, motion->track[bone->id]);
+    if (BOBJ_TRACK_ROT_ONLY(track)) {
+        *pos = bone->rest;
+        BtlObjAnim_SampleRot(track, rot, &cursor, frame);
+    } else {
+        BtlObjAnim_SamplePosRot(track, pos, rot, &cursor, frame);
+        if (bone->id == 2) {
+            pos->x += bone->rest.x;
+            pos->y = bone->rest.y + pos->y * hipScale;
+            pos->z += bone->rest.z;
+        }
+    }
+}
+
+void BtlObjEmote_Draw(BobjObj *obj, void (*draw)(BobjObj *), int selected, f32 elapsed) {
+    enum { MAX_MODEL_NODES = 128, MAX_MODEL_DEPTH = 64 };
+    extern f32 fmodf(f32, f32);
+    BtlEmoteDrawNode saved[MAX_MODEL_NODES];
+    Mtx44 transforms[MAX_MODEL_DEPTH];
+    BobjBone *bone;
+    BobjAnim *motion = (BobjAnim *)kBattleEmotes[selected - 1].data;
+    const f32 frame = fmodf(elapsed, (f32)motion->length);
+    const f32 t = frame / 6.0f;
+    const f32 mix = t < 1.0f ? t * t * (3.0f - 2.0f * t) : 1.0f;
+    const BobjBone *hip = obj->mdl.nodes ? BtlObj_FindBound(obj, 2) : NULL;
+    s32 count = 0;
+    s32 depth = 0;
+    s32 valid = obj->mdl.nodes != NULL && hip != NULL;
+    f32 hipScale = valid ? hip->rest.y / -10.09f : 1.0f;
+
+    if (hipScale < 0.3f || hipScale > 4.0f) hipScale = 1.0f;
+    transforms[0] = obj->xf.mtx;
+    for (bone = obj->mdl.nodes; valid; bone = (BobjBone *)((u8 *)bone + bone->next)) {
+        BobjPart *part = BtlObj_GetNode(obj, bone->id);
+        Vec4 pos;
+        Quat rot;
+        Mtx44 local;
+
+        if (!part || count == MAX_MODEL_NODES || depth + 1 == MAX_MODEL_DEPTH) {
+            valid = 0;
+            break;
+        }
+        saved[count++] = (BtlEmoteDrawNode){part, part->mtx, part->parent};
+        BtlObjEmote_Sample(motion, bone, part, frame, hipScale, &pos, &rot);
+        if (mix < 1.0f) {
+            Vec4 fromPos = part->pos;
+            Quat fromRot = part->rot;
+            if (elapsed >= motion->length) {
+                BtlObjEmote_Sample(motion, bone, part, (f32)motion->length, hipScale, &fromPos, &fromRot);
+            }
+            Vec4_Lerp(&pos, &pos, &fromPos, mix);
+            Quat_Slerp(&rot, &fromRot, &rot, mix);
+        }
+        Quat_ToMtx(&local, &rot);
+        Vec3_Copy((Vec4 *)local.m[3], &pos);
+        part->parent = transforms[depth];
+        Mtx_Mul(&part->mtx, &part->parent, &local);
+        transforms[++depth] = part->mtx;
+        if (bone->last) break;
+        if (!bone->next || bone->pop > depth) {
+            valid = 0;
+            break;
+        }
+        depth -= bone->pop;
+    }
+    if (valid) draw(obj);
+    while (count) {
+        const BtlEmoteDrawNode *node = &saved[--count];
+        node->part->mtx = node->matrix;
+        node->part->parent = node->parent;
+    }
+    if (!valid) draw(obj);
+}
+#endif
 
 /* Reads the events of layer 0 for this frame: the hit window that is open (its volume and nodes), the number of
    hit windows, and up to eight distinct events whose frame lies in (previous frame, frame]. */
@@ -2325,15 +2424,18 @@ typedef struct BObjBindView {
 
 /* BT4 stores these tables once per fighter rather than inside every costume.
    They remain live until the scene's resource manager shuts down. */
-static void *sBt4CharaPack[250][3];
+static void *sBt4CharaPack[250][5];
 extern s32 File_GetSize(s32 id);
 extern void *File_LoadSync(s32 id, void *buf, s32 unused);
 extern unsigned Port_GameBigAlloc(int size);
 extern void Heap_Free(void *ptr);
 
+static void Bt4Balance_FreeMoves(void);
+
 void Bt4_FreeCharaPacks(void) {
     s32 c, k;
-    for (c = 0; c < 250; c++) for (k = 0; k < 3; k++) {
+    Bt4Balance_FreeMoves();
+    for (c = 0; c < 250; c++) for (k = 0; k < 5; k++) {
         if (sBt4CharaPack[c][k] != NULL) {
             Heap_Free(sBt4CharaPack[c][k]);
             sBt4CharaPack[c][k] = NULL;
@@ -2341,12 +2443,11 @@ void Bt4_FreeCharaPacks(void) {
     }
 }
 
-static void *Bt4_CharaPack(BObjSlot *slot, s32 kind) {
-    s32 c = slot->file[1].id - 0x141E;
+static void *Bt4_CharaPackById(s32 c, s32 kind) {
     s32 id, size;
     if (c < 0 || c >= 250) return NULL;
     if (sBt4CharaPack[c][kind] == NULL) {
-        id = c + (kind == 0 ? 0x1036 : kind == 1 ? 0x1130 :
+        id = c + (kind == 0 ? 0x1036 : kind == 1 ? 0x1130 : kind == 3 ? 0x141E : kind == 4 ? 0x1518 :
                   (gSaveData->flags & 1) ? 0x1324 : 0x122A);
         size = File_GetSize(id);
         sBt4CharaPack[c][kind] = (void *)Port_GameBigAlloc(size);
@@ -2355,10 +2456,16 @@ static void *Bt4_CharaPack(BObjSlot *slot, s32 kind) {
     return sBt4CharaPack[c][kind];
 }
 
+static void *Bt4_CharaPack(BObjSlot *slot, s32 kind) {
+    return Bt4_CharaPackById(slot->file[1].id - 0x141E, kind);
+}
+
 static void *Bt4_PackEntry(void *pack, s32 n) {
     u32 *p = pack;
     return p != NULL && p[n] != p[n + 1] ? (u8 *)p + (p[n] & ~3) : NULL;
 }
+
+#include "bt4_private_moves.inc"
 
 void BtlObj_BindTables(BObj *obj) {
     BObjMdl *mdl;
@@ -2436,6 +2543,7 @@ void BtlObj_BindTables(BObj *obj) {
         mdl->unk91C = tables + 0x2D50;
         mdl->unk920 = tables + 0x2F50;
     }
+    if (tables != NULL) Bt4Balance_BindMoves(mdl, slot->file[1].id - 0x141E, tables);
     mdl->chain = BObjFile_GetEntry(&slot->file[0], 0x17);
 }
 

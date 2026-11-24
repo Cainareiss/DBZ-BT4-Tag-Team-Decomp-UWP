@@ -19,7 +19,7 @@ BASE = ["clang", f"--target={TRIPLE}", "-std=gnu89", "-fms-extensions",
         "-mno-ms-bitfields", "-msoft-float", "-mno-sse", "-mno-mmx",
         "-fno-strict-aliasing", "-ffp-contract=off", "-fcommon",
         "-fno-stack-protector", "-fno-builtin", "-Wno-everything", "-O2",
-        "-DPORT=1", "-DBT3_UWP=1", "-DWINAPI_FAMILY=WINAPI_FAMILY_APP",
+        "-DPORT=1", "-DBT3_UWP=1", "-DBT4_TAG_TEAM_EXPANDED=1", "-DWINAPI_FAMILY=WINAPI_FAMILY_APP",
         "-Iinclude", "-Iport/include"]
 
 

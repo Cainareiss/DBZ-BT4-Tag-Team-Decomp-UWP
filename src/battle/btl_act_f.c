@@ -2,6 +2,8 @@ extern int TagBattle_Active(void);
 #include "common.h"
 extern s32 Bt4_HasRecoveryVariant(void *chr);
 #include "battle/btl_act_f.h"
+#include "battle/bt4_balance.h"
+#include "battle/btl_char_mgr.h"
 
 /*
  * Blast 2 / Ultimate Blast actions: 0x1F5460..0x1FC2B0, in two parts (to 0x1F8C00, and from there the rush
@@ -121,8 +123,12 @@ extern s32 BtlSuper_GetRecoilDamage(BtlSuperChr *chr, s32 cls);  /* health cost 
 extern s32 BtlSuper_GetHitDirKind(BtlSuperChr *chr, s32 cls);  /* kind 0..9 (s8) */
 extern s32 BtlSuper_GetStepCount(BtlSuperChr *chr, s32 cls);  /* number of rush steps, at least 1 */
 extern s32 BtlSuper_GetDrain(BtlSuperChr *chr, s32 cls);  /* health drained */
+extern s32 Bt4Balance_FasterRecovery(void *chr);
 extern s32 BtlSuper_GetCooldownFrames(BtlSuperChr *chr, s32 cls);  /* cooldown: seconds * 30 */
 extern s32 BtlSuper_GetChargeLimitFrames(BtlSuperChr *chr, s32 cls);  /* charge time: seconds * 30 */
+#ifdef BT4_TAG_TEAM_EXPANDED
+extern s32 BtlSuper_GetReleaseDelayFrames(BtlSuperChr *chr, s32 cls);
+#endif
 extern s32 BtlSuper_GetDamage(BtlSuperChr *chr, s32 cls, s32 a2, s32 a3); /* damage */
 extern s32 BtlSuper_GetKiCost(BtlSuperChr *chr, s32 cls);  /* ki cost (halved with ability 0x2B) */
 extern s32 BtlSuper_IsThrow(BtlSuperChr *chr, s32 cls);  /* one of the technique's four reactions is 0x22 (a catch) */
@@ -695,6 +701,7 @@ void BtlAct_SuperBeamHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -889,6 +896,7 @@ void BtlAct_SuperWarpBeamHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -1029,6 +1037,7 @@ void BtlAct_SuperLongBeamHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -1073,6 +1082,14 @@ void BtlAct_SuperLongBeamHandler(BtlSuperChr *chr, s32 phase) {
  * the charge time (a third with ability 0x4A).
  */
 void BtlAct_SuperChargeHandler(BtlSuperChr *chr, s32 phase) {
+#ifdef BT4_TAG_TEAM_EXPANDED
+    s32 *releaseDelay = &chr->work[3];
+
+    if (phase == 0) {
+        s32 delay = BtlSuper_GetReleaseDelayFrames(chr, BtlAct_GetCurrentClass(chr));
+        *releaseDelay = delay > 0 ? delay : -1;
+    }
+#endif
     s32 *timer = &chr->work[2];
     s32 cls = BtlAct_GetCurrentClass(chr);
 
@@ -1110,8 +1127,13 @@ void BtlAct_SuperChargeHandler(BtlSuperChr *chr, s32 phase) {
             aim = 1;
             BtlSuper_SetClass(chr, cls);
             BtlChar_SetFlag(chr, 0x53);
-            if (++*timer >= limit) {
-                chr->work[0] |= 1;
+#ifdef BT4_TAG_TEAM_EXPANDED
+            if (!(chr->work[0] & 1) || *releaseDelay < 0)
+#endif
+            {
+                if (++*timer >= limit) {
+                    chr->work[0] |= 1;
+                }
             }
             chr->charge = *timer * 2.0f / limit;
             if (BtlMember_HasAbility(chr, 0x4A)) {
@@ -1128,6 +1150,12 @@ void BtlAct_SuperChargeHandler(BtlSuperChr *chr, s32 phase) {
                 chr->chargeFull++;
             }
             if (chr->work[0] & 1) {
+#ifdef BT4_TAG_TEAM_EXPANDED
+                if (*releaseDelay > 0) {
+                    --*releaseDelay;
+                    break;
+                }
+#endif
                 BtlAnim_Request(chr, SUPER_ANIM(cls, 2), 0.0f);
                 *timer = 0;
             }
@@ -1160,6 +1188,7 @@ void BtlAct_SuperChargeHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -1336,6 +1365,7 @@ void BtlAct_SuperRepeatHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -1476,6 +1506,7 @@ void BtlAct_SuperQuickBeamHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -1569,6 +1600,7 @@ void BtlAct_SuperQuickLongBeamHandler(BtlSuperChr *chr, s32 phase) {
         case 0x10B:
         case 0x12D:
         case 0x14F:
+            if (cls == 3 && Bt4Balance_FasterRecovery(chr)) BtlAnim_SetStep(chr, 3.0f);
             if (BtlAnim_Advance(chr, 0)) {
                 chr->work[1] = 1;
             }
@@ -3057,6 +3089,10 @@ void BtlAct_ClashStruggleHandler(ActGChr *chr, s32 phase) {
         BtlChar_SetFlag(chr, 0x45);
         BtlChar_SetFlag(chr, 0x46);
         BtlChar_SetFlag(chr, 0x134);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        {extern s32 TagFusion_ClashExtra(s32,s32);
+         if(chr->actionFrame>=0x10 && TagFusion_ClashExtra(chr->player,0x50))chr->clashPower+=3;}
+#endif
         if (chr->actionFrame >= 0x10 && BtlInput_TestAction(chr, 0x50, 1)) {
             chr->clashPower += 3;
 #ifdef PORT /* PC build: BT3_CLASH_LOG=1 says what a clash counts (testing the Square option) */
@@ -3099,7 +3135,20 @@ void BtlAct_ClashLostHandler(ActGChr *chr, s32 phase) {
     if (phase == 0) {
         BtlAnim_Play(chr, 0x172, 0.0f);
         ChrCam_RequestCut(chr, 1, chr->player + 0x21);
-        if (!Bt4_HasRecoveryVariant(chr)) {
+#ifdef BT4_TAG_TEAM_EXPANDED
+        {
+            extern BtlMgrMember *BtlMember_GetActive(void *chr);
+            const BtlMgrMember *member = BtlMember_GetActive(chr);
+            if (Bt4_ExtraFormsAllowed() && member->chara == BT4_ZAMASU_FUSED &&
+                member->clashCorruption == BT4_CLASH_CORRUPTION_PENDING) {
+                BtlAct_SetFormCurrent(chr);
+                chr->form.costume = BT4_ZAMASU_CORRUPTED_OUTFIT;
+                chr->form.unk14 = 0;
+                chr->work[0] |= 1;
+            }
+        }
+#endif
+        if (!(chr->work[0] & 1) && !Bt4_HasRecoveryVariant(chr)) {
             chr->work[0] |= 1;
             BtlAct_SetFormCurrent(chr);
         }
@@ -3194,6 +3243,10 @@ s32 BtlAct_SuperLaunchedUpHandler(ActGChr *chr, s32 phase) {
  * on every frame: the battle is frozen until the model has loaded.
  */
 s32 BtlAct_ChangeRandomCharaHandler(ActGChr *chr, s32 phase) {
+#ifdef BT4_TAG_TEAM_EXPANDED
+    {extern s32 TagFusion_Separating(s32);extern void TagFusion_Action(void *,s32);
+     if(TagFusion_Separating(chr->player)){TagFusion_Action(chr,phase);return 0;}}
+#endif
 #ifdef PORT
     {extern s32 Bt4BodyChange_Active(s32);extern void Bt4BodyChange_Action(void *,s32);
      if(Bt4BodyChange_Active(chr->player)){Bt4BodyChange_Action(chr,phase);return 0;}}

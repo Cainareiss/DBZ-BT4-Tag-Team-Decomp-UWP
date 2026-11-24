@@ -1,4 +1,6 @@
 #include "common.h"
+#include "battle/bt4_balance.h"
+#include "battle/bt4_private_balance.h"
 #include "battle/btl_tech_b.h"
 
 /*
@@ -41,6 +43,10 @@ extern s32 BtlAct_GetCurrent(BtlTechBChr *chr);
 extern s32 BtlAnim_GetId(BtlTechBChr *chr);
 extern f32 BtlStat_GetKiBlastDamageScale(BtlTechBChr *chr);
 extern f32 BtlStat_GetSpeedScale(BtlTechBChr *chr);
+#ifdef BT4_TAG_TEAM_EXPANDED
+extern s32 BtlStat_GetLevel3(BtlTechBChr *chr);
+extern f32 BtlStat_EvalCurve(s32 level, s32 row);
+#endif
 extern f32 BtlStat_GetBlast2DamageScale(BtlTechBChr *chr);
 extern f32 BtlStat_GetUltimateDamageScale(BtlTechBChr *chr);
 extern s32 BtlParam_GetFlags(BtlTechBChr *chr);
@@ -107,7 +113,8 @@ s32 BtlParam_GetUnk72(BtlTechBChr *chr) {
 
 /* Parameter +0x74: attack charge rate at gauge 0 (BtlAct_GetChargeRate); x1.2 with ability 0x4A. */
 f32 BtlParam_GetChargeRateA(BtlTechBChr *chr) {
-    f32 v = BtlChar_GetObj(chr)->param->chargeRateA;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    f32 v = obj->chara >= 131 && obj->chara <= 133 ? 0.9f : obj->param->chargeRateA;
 
     if (BtlMember_HasAbility(chr, 0x4A)) {
         v *= 1.2f;
@@ -117,12 +124,18 @@ f32 BtlParam_GetChargeRateA(BtlTechBChr *chr) {
 
 /* Parameter +0x78: attack charge rate at a full gauge. */
 f32 BtlParam_GetChargeRateB(BtlTechBChr *chr) {
-    return BtlChar_GetObj(chr)->param->chargeRateB;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    if ((obj->chara >= 131 && obj->chara <= 133) || obj->chara == 190 || obj->chara == 209) {
+        return 4.31f;
+    }
+    return obj->param->chargeRateB;
 }
 
 /* Parameter +0x7C: multiplier of the damage this character takes (BtlMember_Damage). */
 f32 BtlParam_GetDamageTakenScale(BtlTechBChr *chr) {
-    return BtlChar_GetObj(chr)->param->damageTaken;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    if (obj->chara == 92 || obj->chara == 194) return 0.95f;
+    return obj->param->damageTaken * (100 - Bt4Balance_Rule(obj->chara)->defense) / 100.0f;
 }
 
 /* Seconds the fighter +0x99C gauge takes to fill: parameter +0x64, / 1.2 (ability 0x34), then x2 (0x1B) or / 0.8 (0x35). */
@@ -197,7 +210,7 @@ s32 BtlParam_GetMaxPowerSound(BtlTechBChr *chr) {
 
 /* 1 unless the character has parameter flag 0x1000 and lacks ability 0x36. */
 s32 BtlParam_CanFly(BtlTechBChr *chr) {
-    if (!(BtlParam_GetFlags(chr) & 0x1000)) {
+    if (Bt4Balance_Rule(BtlChar_GetObj(chr)->chara)->flight || !(BtlParam_GetFlags(chr) & 0x1000)) {
         return 1;
     }
     return BtlMember_HasAbility(chr, 0x36) != 0;
@@ -211,7 +224,7 @@ s32 BtlParam_CanFly(BtlTechBChr *chr) {
  * four functions are the ability and reaction adjustments those readers share.
  */
 
-/* Ki blast damage after abilities: +50 % (0xA), then halved (0xB). The kind argument is unused. */
+/* Ki blast damage after abilities and the adjustments for neutral, dash and rising shots. */
 s32 BtlKiBlast_ScaleDamageByAbility(BtlTechBChr *chr, s32 damage, s32 kind) {
     if (BtlMember_HasAbility(chr, 0xA)) {
         damage += damage / 2;
@@ -219,6 +232,23 @@ s32 BtlKiBlast_ScaleDamageByAbility(BtlTechBChr *chr, s32 damage, s32 kind) {
     if (BtlMember_HasAbility(chr, 0xB)) {
         damage /= 2;
     }
+#ifdef BT4_TAG_TEAM_EXPANDED
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    if (obj->param->unk0[2] != 4 && !Bt4Balance_Rule(obj->chara)->excludeKi) {
+        damage += damage / 2;
+    }
+    if (obj->chara == 54) damage += damage / 10;
+    if (obj->chara == BT4_CELL_PERFECT) {
+        damage = damage * 3 / 10;
+    }
+    /* Projectile kinds 4-7 are dash shots, 8-11 are vertical shots, and 12 is the combo volley. */
+    if (kind == 12) {
+        damage /= 2;
+    } else {
+        damage = damage * ((kind >= 4 && kind <= 11) ? 120 : 70) / 100;
+    }
+    if (obj->chara == 28) damage = damage * 85 / 100; /* Chiaotzu */
+#endif
     return damage;
 }
 
@@ -888,21 +918,23 @@ f32 BtlKiBlast_GetGuardPushOf(BtlTechBChr *chr, u32 kind) {
 
 /* Movement speed n per frame: table value in 10 km/h, x pose +0xAC for n 4 and 5, x curve row 8 except n 15 and 19, at most 4000 km/h. */
 f32 BtlMoveParam_GetSpeed(BtlTechBChr *chr, s32 n) {
-    f32 v = BtlChar_GetObj(chr)->move->speed[n] * 10.0f * BTL_KMH_PER_FRAME;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    f32 v = obj->move->speed[n] * 10.0f * BTL_KMH_PER_FRAME;
 
-    switch (n) {
-    case 15:
-    case 19:
-        break;
-    case 4:
-    case 5:
-        v *= BtlChar_GetPos(chr)->unkAC;
-        v *= BtlStat_GetSpeedScale(chr);
-        break;
-    default:
-        v *= BtlStat_GetSpeedScale(chr);
-        break;
+    if (n != 15 && n != 19) {
+        f32 scale = BtlStat_GetSpeedScale(chr);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        if (obj->chara == BT4_GOTENKS) {
+            s32 level = BtlStat_GetLevel3(chr);
+            scale = BtlStat_EvalCurve(level > -20 ? level - 1 : -20, 8);
+        }
+#endif
+        if (n == 4 || n == 5) {
+            v *= BtlChar_GetPos(chr)->unkAC;
+        }
+        v *= scale;
     }
+
     if (BTL_KMH(4000.0f) < v) {
         v = BTL_KMH(4000.0f);
     }
@@ -995,9 +1027,17 @@ u32 BtlSuper_GetFlagsA(BtlTechBChr *chr, s32 slot) {
 
 /* Second flag word of the technique. */
 u32 BtlSuper_GetFlags(BtlTechBChr *chr, s32 slot) {
-    BtlSuperData *tbl = BtlChar_GetObj(chr)->super;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    BtlSuperData *tbl = obj->super;
 
     slot -= 2;
+    if (slot == 2 && obj->chara == 1) return tbl->flags[slot] | 1u;
+#ifdef BT4_TAG_TEAM_EXPANDED
+    if (slot == 0 && ((obj->chara == BT4_YAJIROBE && tbl->id[slot] == 419) ||
+                      (obj->chara == 150 && tbl->id[slot] == 460))) {
+        return tbl->flags[slot] & ~1u;
+    }
+#endif
     return tbl->flags[slot];
 }
 
@@ -1013,7 +1053,11 @@ s32 BtlSuper_GetUnk1E(BtlTechBChr *chr, s32 slot) {
 
 /* Table +0x24 (seconds). */
 f32 BtlSuper_GetShotTime(BtlTechBChr *chr, s32 slot) {
-    return BtlChar_GetObj(chr)->super->shotTime[slot - 2];
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    if (slot == 3 && obj->chara == 150 && obj->super->id[1] == 668) {
+        return 0.6f; /* Toppo: six extra battle ticks, still a short rush. */
+    }
+    return obj->super->shotTime[slot - 2];
 }
 
 /* Speed per frame of the technique's projectile (table +0x54 in 10 km/h). */
@@ -1132,8 +1176,19 @@ f32 BtlSuper_GetGuardPush(BtlTechBChr *chr, s32 slot) {
 
 /* Table damage * curve row 9 (slots 2, 3) or row 10 (slot 4); per hit unless `total`. */
 s32 BtlSuper_GetBaseDamage(BtlTechBChr *chr, s32 slot, s32 total) {
-    s32 damage = BtlChar_GetObj(chr)->super->damage[slot - 2];
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    s32 damage = obj->super->damage[slot - 2];
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+    s32 technique = obj->super->id[slot - 2];
+    if (slot == 3 && obj->chara == BT4_GOKU_GT_SSJ3 && technique == 346) {
+        damage = 6200; /* Around 7750 against a neutral defender after this form's damage scale. */
+    } else if (slot == 4 && obj->chara == BT4_GOKU_GT && technique == 721) {
+        damage = 12500;
+    } else if (slot == 3 && obj->chara == BT4_BUU_PURE_EVIL && technique == 317) {
+        damage = 7000;
+    }
+#endif
     switch (slot) {
     case 2:
     case 3:
@@ -1142,6 +1197,16 @@ s32 BtlSuper_GetBaseDamage(BtlTechBChr *chr, s32 slot, s32 total) {
     case 4:
         damage *= BtlStat_GetUltimateDamageScale(chr);
         break;
+    }
+    {
+        const Bt4BalanceRule *rule = Bt4Balance_Rule(obj->chara);
+        s32 idx = slot - 2;
+        if (idx >= 0 && idx < 2 && rule->damage[idx]) {
+            damage = rule->damage[idx] * (BtlStat_GetBlast2DamageScale(chr) / BtlStat_EvalCurve(0, 9));
+        }
+        if (rule->superScale[idx] > 0) {
+            damage = damage * (100 + rule->superScale[idx]) * 83 / 10000;
+        }
     }
     if (!total) {
         damage /= BtlSuper_GetHitCount(chr, slot);
@@ -1168,10 +1233,30 @@ s32 BtlSuper_GetBaseGuardDamage(BtlTechBChr *chr, s32 slot, s32 total) {
     return damage;
 }
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+/* A chargeable Blast 2 can hold its firing cue briefly after the release input. */
+s32 BtlSuper_GetReleaseDelayFrames(BtlTechBChr *chr, s32 slot) {
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    return slot == 2 && obj->chara == BT4_GAMMA_2 && BtlSuper_GetId(chr, slot) == 334 ? 30 : 0;
+}
+#endif
+
 /* Ki the technique costs; halved with ability 0x2B. */
 s32 BtlSuper_GetKiCost(BtlTechBChr *chr, s32 slot) {
-    s32 ki = BtlChar_GetObj(chr)->super->ki[slot - 2];
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    s32 ki = obj->super->ki[slot - 2];
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+    s32 technique = obj->super->id[slot - 2];
+    if ((slot == 3 && ((obj->chara == BT4_GAMMA_2 && technique == 485) ||
+                       (obj->chara == BT4_SUPREME_KAI && technique == 426))) ||
+        (slot == 2 && obj->chara == BT4_VIDEL && technique == 355)) {
+        ki = 4 * 20000;
+    }
+#endif
+    if (slot < 4 && Bt4Balance_Rule(obj->chara)->ki[slot - 2]) {
+        ki = 20000 * Bt4Balance_Rule(obj->chara)->ki[slot - 2];
+    }
     if (BtlMember_HasAbility(chr, 0x2B)) {
         ki /= 2;
     }
@@ -1188,9 +1273,15 @@ s32 BtlSuper_GetDrain(BtlTechBChr *chr, s32 slot) {
     return BtlChar_GetObj(chr)->super->drain[slot - 2];
 }
 
+s32 Bt4Balance_FasterRecovery(BtlTechBChr *chr) {
+    return Bt4Balance_Rule(BtlChar_GetObj(chr)->chara)->recovery;
+}
+
 /* Cooldown after the technique in frames (table +0x1C0 in seconds); stored in fighter +0xE40 on leaving. */
 s32 BtlSuper_GetCooldownFrames(BtlTechBChr *chr, s32 slot) {
-    return BtlChar_GetObj(chr)->super->cooldown[slot - 2] * 30.0f;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    f32 seconds = obj->super->cooldown[slot - 2];
+    return seconds * 30.0f;
 }
 
 /* Table +0x1CC (seconds) in frames: how long the charge type can be held. */
@@ -1425,9 +1516,16 @@ u32 BtlSkill_GetFlagsA(BtlTechBChr *chr, s32 slot) {
 
 /* Second flag word of the skill. */
 u32 BtlSkill_GetFlags(BtlTechBChr *chr, s32 slot) {
-    BtlSkillData *tbl = BtlChar_GetObj(chr)->skill;
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    u32 flags = obj->skill->flags[slot];
 
-    return tbl->flags[slot];
+#ifdef BT4_TAG_TEAM_EXPANDED
+    /* Wild Sense uses the normal skill input rules during hit reactions. */
+    if (obj->chara == BT4_TRUNKS_SUPER && obj->skill->id[slot] == 55) {
+        flags &= ~8u;
+    }
+#endif
+    return flags;
 }
 
 /* Skill id. */
@@ -1568,8 +1666,18 @@ s32 BtlSkill_GetGuardDamage(BtlTechBChr *chr, s32 slot, s32 total) {
 
 /* Blast gauge the skill costs: stocks (one less with ability 0x15, at least 1) * 100000. */
 s32 BtlSkill_GetBlastCost(BtlTechBChr *chr, s32 slot) {
-    s32 n = BtlChar_GetObj(chr)->skill->stocks[slot];
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    s32 n = obj->skill->stocks[slot];
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+    if (slot == 1 && obj->chara == BT4_GAMMA_2 && obj->skill->id[slot] == 38) {
+        n = 3;
+    }
+#endif
+    {
+        const Bt4BalanceRule *rule = Bt4Balance_Rule(obj->chara);
+        if (rule->blast[slot]) n = rule->blast[slot];
+    }
     if (BtlMember_HasAbility(chr, 0x15)) {
         n--;
     }
@@ -1607,13 +1715,20 @@ s32 BtlSkill_GetFrames(BtlTechBChr *chr, s32 slot) {
 /* Health the skill gives (negative: takes): table percent of the maximum health. */
 s32 BtlSkill_GetHealthChange(BtlTechBChr *chr, s32 slot) {
     BtlSkillData *tbl = BtlChar_GetObj(chr)->skill;
-
-    return BtlMember_GetActiveGauge(chr)->healthMax * tbl->healthPct[slot] / 100;
+    s32 maximum=BtlMember_GetActiveGauge(chr)->healthMax;
+#ifdef PORT
+    if(tbl->healthPct[slot]>0){
+        extern s32 BtlMember_HealingMaximum(BtlTechBChr *,s32),BtlMember_GetActiveIndex(BtlTechBChr *);
+        maximum=BtlMember_HealingMaximum(chr,BtlMember_GetActiveIndex(chr));
+    }
+#endif
+    return (s32)((s64)maximum * tbl->healthPct[slot] / 100);
 }
 
 /* Ki the skill gives (negative: takes). */
 s32 BtlSkill_GetKiChange(BtlTechBChr *chr, s32 slot) {
-    return BtlChar_GetObj(chr)->skill->ki[slot];
+    BtlTechBObj *obj = BtlChar_GetObj(chr);
+    return obj->chara == 1 && slot == 1 ? 60000 : obj->skill->ki[slot];
 }
 
 /* Table +0xB8: second timed value (BtlSkill_Apply). */

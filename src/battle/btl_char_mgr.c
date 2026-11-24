@@ -8,8 +8,13 @@ extern s32 TagBattle_IsActorLoading(s32 actor);
 #include "battle/battle.h"
 #include "battle/battle_setup.h"
 #include "battle/btl_char_mgr.h"
+#include "battle/bt4_balance.h"
+#ifdef BT4_TAG_TEAM_EXPANDED
+#include "battle/tag_team_fusion.h"
+#endif
 #include "battle/btl_scene.h"
 #include "battle/btl_seq.h"
+#include "battle/tag_team_native.h"
 #include "sys/common.h"
 #include "sys/heap.h"
 #include "sys/save.h"
@@ -374,6 +379,17 @@ void BtlChar_Reset(BtlMgrChr *chr) {
 }
 
 /* Applies the form change of the current action once the new model is loaded. */
+#ifdef BT4_TAG_TEAM_EXPANDED
+void Bt4_MarkBeamClashLoss(s32 side) {
+    if (!Bt4_ExtraFormsAllowed()) return;
+    BtlMgrMember *member = BtlMember_GetActive(BtlChar_Get(side));
+    if (member->chara == BT4_ZAMASU_FUSED && member->costume == BT4_ZAMASU_NORMAL_OUTFIT &&
+        member->gauge.health > 0) {
+        member->clashCorruption = BT4_CLASH_CORRUPTION_PENDING;
+    }
+}
+#endif
+
 void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     BtlMgrObj *obj;
     BtlMgrMember *m;
@@ -382,7 +398,14 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     BtlMgrGauge *og;
     f32 ratio;
     s32 i;
+#ifdef BT4_TAG_TEAM_EXPANDED
+    s32 healthBoost = 0;
+#endif
+    const TagHealthRule *healthRule = TagBattle_HealthRule(chr->side);
 
+#ifdef BT4_TAG_TEAM_EXPANDED
+    TagFusion_BeforeModelLoaded(chr);
+#endif
     BtlChar_BindObject(chr);
     obj = BtlChar_GetObj(chr);
     BtlChar_SetFlag(chr, 0x12B);
@@ -391,7 +414,11 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     BtlChar_PoseToObj(chr, 1);
     BtlObjPose_CalcMatrices(obj);
 #ifdef PORT
-    if (!Bt4BodyChange_OnModelLoaded(chr))
+    if (!Bt4BodyChange_OnModelLoaded(chr)
+#ifdef BT4_TAG_TEAM_EXPANDED
+        && !TagFusion_OnModelLoaded(chr)
+#endif
+    )
 #endif
     switch (BtlAct_GetCurrent(chr)) {
     case 0xEC:
@@ -400,25 +427,45 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     case 0xEF:
     case 0xF0:
         /* transformation: keep the health ratio */
+        {
+        s32 oldChara = BtlMember_GetActive(chr)->chara;
+        s32 oldHealth = BtlMember_GetActive(chr)->gauge.health;
+        s32 oldKi = BtlMember_GetActive(chr)->gauge.ki;
         m = BtlMember_GetActive(chr);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        if (Bt4_ExtraFormsAllowed() && m->chara == chr->newChara && m->costume != chr->newCostume &&
+            ((m->chara == BT4_JIREN && chr->newCostume == BT4_JIREN_FULL_POWER_OUTFIT) ||
+             (m->chara == BT4_ZAMASU_FUSED && chr->newCostume == BT4_ZAMASU_GIANT_OUTFIT))) {
+            healthBoost = 10000;
+        }
+#endif
         m->chara = chr->newChara;
         g = &m->gauge;
         m->costume = chr->newCostume;
         g->unk20 = chr->new20;
-        ratio = BtlMember_GetHealthRatio(chr);
+        ratio = healthRule ? 0.0f : BtlMember_GetHealthRatio(chr);
         BtlMember_LoadParams(chr, BtlMember_GetActiveIndex(chr), 0, 0.0f, 0);
-        g->health = (f32)g->healthMax * ratio + 0.5f;
-        if (BtlParam_GetUnkAD(chr) & 1) {
-            g->health += 5000;
-        }
-        if (BtlParam_GetUnkAD(chr) & 2) {
-            g->health += 10000;
+        if (!healthRule) {
+            g->health = (f32)g->healthMax * ratio + 0.5f;
+            if (oldChara != m->chara && (oldChara == 43 || oldChara == 67 || m->chara == 43 || m->chara == 67)) {
+                g->health = oldHealth + ((m->chara == 43 || m->chara == 67) ? 10000 : -10000);
+            }
+            if (BtlParam_GetUnkAD(chr) & 1) g->health += 5000;
+            if (BtlParam_GetUnkAD(chr) & 2) g->health += 10000;
         }
         if (BtlParam_GetUnkAD(chr) & 4) {
             g->ki = g->kiMax;
+        } else if ((oldChara == 94 && m->chara == 70) || (oldChara == 126 && m->chara == 127) ||
+                   (oldChara == 199 && m->chara == 200) || (oldChara == 197 && m->chara == 147)) {
+            g->ki = BtlUtil_Clamp(oldKi, 0, g->kiMax);
         }
-        g->health = BtlUtil_Clamp(g->health, 1, g->healthMax);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        g->healthMax += healthBoost;
+        g->health += healthBoost;
+#endif
+        g->health = BtlUtil_Clamp(g->health, healthRule ? 0 : 1, g->healthMax);
         g->blast = BtlUtil_Clamp(g->blast, 0, g->blastMax);
+        }
         break;
     case 0xF3:
     case 0xF4:
@@ -502,6 +549,13 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     case 0x13A:
     case 0x13B:
         m = BtlMember_GetActive(chr);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        if (BtlAct_GetCurrent(chr) == 0x104 && m->clashCorruption == BT4_CLASH_CORRUPTION_PENDING &&
+            m->chara == BT4_ZAMASU_FUSED && m->costume == BT4_ZAMASU_NORMAL_OUTFIT &&
+            chr->newCostume == BT4_ZAMASU_CORRUPTED_OUTFIT) {
+            m->clashCorruption = 0;
+        }
+#endif
         m->chara = chr->newChara;
         g = &m->gauge;
         m->costume = chr->newCostume;
@@ -510,10 +564,13 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
             g->unk30 = 1;
             BtlObj_BindCommonTables(obj);
             BtlMember_LoadParams(chr, BtlMember_GetActiveIndex(chr), 0, 0.0f, 0);
-            g->health = g->healthMax;
+            if (!healthRule) g->health = g->healthMax;
         }
         break;
     }
+#ifdef BT4_TAG_TEAM_EXPANDED
+    TagFusion_AfterModelLoaded(chr);
+#endif
     BtlObj_SetColorPreset(obj, BtlParam_GetAuraKind(chr), -1);
     if (BtlMember_GetActiveGauge(chr)->unk20 != 0) {
         obj->flags |= 0x40000000;
@@ -537,7 +594,19 @@ void BtlChar_OnStageLoaded(BtlMgrChr *chr) {
     chr->unk15D4[4] = 0;
     BtlChar_ResetLook(chr);
     BtlChar_PoseToObj(chr, 1);
-    if ((BtlAnim_GetFlags(BtlAnim_GetId(chr)) & 0x10) || chr->unkFB0 >= 3) {
+    if (TagBattle_Active()) {
+        extern s32 TagFusion_Absent(s32);
+        BtlChar_ClearFlag(chr, 0x139);
+        BtlChar_ClearFlag(chr, 0x13A);
+        BtlChar_ClearFlag(chr, 0x125);
+        BtlChar_ClearFlag(chr, 0x126);
+        if (BtlMember_GetActiveGauge(chr)->health > 0 && !TagFusion_Absent(chr->side)) {
+            BtlChar_ClearFlag(chr, 0xB);
+        }
+        chr->freeze = chr->freezeNext = chr->freezeDelay = 0;
+    }
+    if (TagBattle_Active() ? BtlMember_GetActiveGauge(chr)->health <= 0 :
+        ((BtlAnim_GetFlags(BtlAnim_GetId(chr)) & 0x10) || chr->unkFB0 >= 3)) {
         BtlChar_SetHeldFlag(chr, 0x13A);
     } else {
         BtlChar_SetHeldFlag(chr, 0x139);
@@ -583,10 +652,11 @@ void BtlChar_ResetObjWork(BtlMgrChr *chr) {
 
 /* Shared preparation owner for the script camera bookkeeping. Each actor keeps
  * its own control and view; this owner never requests a full-roster stop. */
-#include "battle/tag_team_native.h"
 #include "tag_team_cut_audit.inc"
 static s32 sTagDefaultCutOwner=-1;
+static s32 sTagSharedCutOwner=-1;
 s32 TagBattle_DefaultCutOwner(void){return sTagDefaultCutOwner;}
+s32 TagBattle_SharedCutOwner(void){return sTagSharedCutOwner;}
 static s32 TagBattle_CutScore(s32 i){return TagBattle_Preparing(i)?2:-1;}
 static s32 TagBattle_FindDefaultCutOwner(void){
     extern s32 TagBattle_Presentation(void),ChrCam_IsCutActive(void *);
@@ -604,6 +674,7 @@ void BtlChars_UpdateFreeze(void) {
     s32 level[10]; /* Per actor, including every TAG TEAM fighter. */
     s32 i;
     s32 max,cutOwner=sTagDefaultCutOwner=TagBattle_FindDefaultCutOwner();
+    sTagSharedCutOwner=-1;
     u8 *bytes;
     BtlMgrChr *chr;
     TagCutAudit_Begin(cutOwner);
@@ -677,6 +748,22 @@ void BtlChars_UpdateFreeze(void) {
                 chr->freeze = chr->freezeNext;
                 chr->freezeNext = 0;
             }
+        }
+    }
+    if(TagBattle_Active()&&max>0){
+        /* If a scripted attack really stops every other living fighter, show
+           its owner to every client until that shared stop is released. */
+        for(i=0;i<BtlChar_GetCount();++i){
+            if(!level[i])continue;
+            const s32 action=BtlAct_GetCurrent(BtlChar_Get(i));
+            if(action>=0xEC&&action<=0xF8)continue;
+            s32 others=0,stopped=0;
+            for(s32 j=0;j<BtlChar_GetCount();++j){
+                if(j==i||BtlMember_GetActiveGauge(BtlChar_Get(j))->health<=0)continue;
+                ++others;
+                if(BtlChar_Get(j)->freeze>0)++stopped;
+            }
+            if(others>0&&stopped==others){sTagSharedCutOwner=i;break;}
         }
     }
 }
@@ -1039,7 +1126,11 @@ void BtlChar_ApplyAbilityRequests(BtlMgrChr *chr) {
 
 /* Phase 2 body: builds this frame's input record from the pad. */
 void BtlChar_SampleInput(BtlMgrChr *chr) {
-    if (!BtlChar_IsFrozen(chr)) {
+    if (!BtlChar_IsFrozen(chr)
+#ifdef BT4_TAG_TEAM_EXPANDED
+        || TagFusion_Absent(chr->side)
+#endif
+    ) {
         BtlChar_SetStage(chr, BTL_CHR_STAGE_SAMPLE);
         BtlInput_Sample(chr);
     }
@@ -1049,6 +1140,9 @@ void BtlChar_SampleInput(BtlMgrChr *chr) {
 void BtlChar_BeginFrame(BtlMgrChr *chr) {
     if (BtlChar_IsFrozen(chr)) {
         BtlInput_Stub(chr);
+#ifdef BT4_TAG_TEAM_EXPANDED
+        if(TagFusion_Absent(chr->side))BtlInput_Update(chr);
+#endif
         return;
     }
     BtlChar_SetStage(chr, BTL_CHR_STAGE_INPUT);
