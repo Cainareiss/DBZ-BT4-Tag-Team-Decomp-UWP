@@ -20,6 +20,7 @@ all: check $(ELF)
 
 check:
 	python3 tools/check_layout.py
+	python3 tools/check_upstream.py
 
 host-check: check $(HOST_SMOKE)
 	$${CC:-cc} -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -Iinclude \

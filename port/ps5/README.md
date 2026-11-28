@@ -4,6 +4,17 @@ Early native port for jailbroken PlayStation 5 consoles. The target is an
 x86-64 homebrew build of BT4decomp, not PS2 emulation. No game data is stored
 in this repository; a compatible BT4 B14 Rev2 ISO will be required.
 
+## Xbox UWP base
+
+This branch already includes the Xbox Dev Mode update **BT4 0.1.39.6 R3**
+from UWP commit `fe118421892e26fb7d069eaa0a98d51d5c973558`. The exact source
+revision is recorded in [`UPSTREAM_UWP.json`](UPSTREAM_UWP.json), and the host
+checks fail if that release no longer matches the shared BT4 version file.
+
+The PS5 work therefore continues from the current Xbox code rather than the
+older 0.1.39.5 base. Platform-specific WinRT, D3D12 and UWP packaging code is
+still replaced at the PS5 boundary instead of being copied directly.
+
 ## Current milestone: PS5 Slim memory and exFAT-aware bootstrap
 
 The game retains 32-bit pointers and expects its heap, stack, emulated PS2

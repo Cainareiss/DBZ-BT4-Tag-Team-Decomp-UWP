@@ -19,7 +19,8 @@ BT4decomp adapts **BT4 B14 Rev2** for Windows, Linux and Apple Silicon. It runs 
 
 > **PS5 development:** an experimental native port for jailbroken PS5 consoles
 > has started in [`port/ps5`](port/ps5/README.md). The current build is a
-> memory/storage compatibility bootstrap, not a playable release.
+> memory/storage compatibility bootstrap based on Xbox UWP 0.1.39.6 R3, not a
+> playable release.
 
 ## Fight together
 
